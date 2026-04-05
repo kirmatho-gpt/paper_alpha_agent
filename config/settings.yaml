@@ -1,0 +1,16 @@
+llm:
+  model_name: "mock-research-model"
+  temperature: 0.0
+
+pipeline:
+  date_window_days: 30
+  max_papers: 20
+  top_k: 5
+  relevance_threshold: 0.55
+
+reporting:
+  output_dir: "data/reports"
+
+api_keys:
+  openai: null
+  semantic_scholar: null

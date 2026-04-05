@@ -1,0 +1,18 @@
+rank_paper_relevance: |
+  Score the paper for quant research relevance, implementability, and novelty.
+  Focus on forecasting of financial instruments, relative value signals, time horizon clarity, and practical testability.
+
+summarize_paper: |
+  Produce a concise summary of the paper, emphasizing data, model family, prediction target, horizon, and implementation constraints.
+
+assess_prior_art: |
+  Compare the paper against adjacent prior work and identify overlaps, differentiation, and replication risk.
+
+extract_research_idea: |
+  Turn the paper into one implementable research idea with a clear signal, dataset assumptions, and caveats.
+
+build_prototype_spec: |
+  Convert the idea into a simplified prototype spec with data requirements, features, signal logic, and evaluation plan.
+
+critique_backtest: |
+  Critique a toy backtest result, focusing on overfitting risk, missing frictions, and next validation steps.
