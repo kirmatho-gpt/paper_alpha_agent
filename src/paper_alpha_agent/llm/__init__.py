@@ -1,3 +1,3 @@
-from paper_alpha_agent.llm.client import LLMClient, MockLLMClient
+from paper_alpha_agent.llm.client import LLMClient, MockLLMClient, OpenAILLMClient
 
-__all__ = ["LLMClient", "MockLLMClient"]
+__all__ = ["LLMClient", "MockLLMClient", "OpenAILLMClient"]

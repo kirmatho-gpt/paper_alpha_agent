@@ -3,7 +3,10 @@ rank_paper_relevance: |
   Focus on forecasting of financial instruments, relative value signals, time horizon clarity, and practical testability.
 
 summarize_paper: |
-  Produce a concise summary of the paper, emphasizing data, model family, prediction target, horizon, and implementation constraints.
+  Produce a structured research summary for this paper using only evidence that is reasonably supported by the provided text.
+  Classify the paper as one of: directly_relevant, adjacent, or out_of_scope.
+  Focus on whether it is useful for ML/deep learning forecasting of financial products or relative value research.
+  If the abstract does not justify a field, use null or describe the uncertainty in missing_information instead of guessing.
 
 assess_prior_art: |
   Compare the paper against adjacent prior work and identify overlaps, differentiation, and replication risk.

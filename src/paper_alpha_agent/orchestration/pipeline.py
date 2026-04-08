@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from paper_alpha_agent.config import AppSettings, get_settings
-from paper_alpha_agent.llm.client import LLMClient, MockLLMClient
+from paper_alpha_agent.llm.client import LLMClient, MockLLMClient, OpenAILLMClient
 from paper_alpha_agent.models.paper import Paper, RankedPaper
 from paper_alpha_agent.models.report import ResearchReport
 from paper_alpha_agent.research.discovery import default_date_window, discover_papers
@@ -37,10 +37,15 @@ class PipelineDependencies:
 
 def build_default_dependencies(settings: AppSettings | None = None) -> PipelineDependencies:
     resolved = settings or get_settings()
+    llm_client: LLMClient
+    if resolved.api_keys.openai:
+        llm_client = OpenAILLMClient(resolved)
+    else:
+        llm_client = MockLLMClient()
     return PipelineDependencies(
         settings=resolved,
         arxiv_client=ArxivClient(),
-        llm_client=MockLLMClient(),
+        llm_client=llm_client,
         semantic_scholar_client=SemanticScholarClient(api_key=resolved.api_keys.semantic_scholar),
         market_data_client=DummyMarketDataClient(),
         backtest_runner=SimpleBacktestRunner(),

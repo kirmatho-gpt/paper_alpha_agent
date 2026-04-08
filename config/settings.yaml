@@ -1,5 +1,5 @@
 llm:
-  model_name: "mock-research-model"
+  model_name: "gpt-4o-mini"
   temperature: 0.0
 
 pipeline:
