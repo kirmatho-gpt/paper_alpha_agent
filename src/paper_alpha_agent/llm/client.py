@@ -11,6 +11,7 @@ from paper_alpha_agent.config import AppSettings
 from paper_alpha_agent.llm.prompts import PromptLibrary
 from paper_alpha_agent.llm.schemas import (
     BacktestCritiqueResponse,
+    FullPaperSummaryResponse,
     IdeaExtractionResponse,
     PaperRankingResponse,
     PaperSummaryResponse,
@@ -37,6 +38,10 @@ class LLMClient(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def summarize_full_paper(self, paper: Paper, full_text: str) -> FullPaperSummaryResponse:
+        raise NotImplementedError
+
+    @abstractmethod
     def assess_prior_art(self, paper: RankedPaper) -> PriorArtAssessmentResponse:
         raise NotImplementedError
 
@@ -54,6 +59,13 @@ class LLMClient(ABC):
 
 
 class MockLLMClient(LLMClient):
+    def __init__(self, *, allow_mock: bool = False) -> None:
+        if not allow_mock:
+            raise RuntimeError(
+                "MockLLMClient is test-only and must be enabled explicitly. "
+                "Pass allow_mock=True to use it intentionally."
+            )
+
     def rank_paper_relevance(self, paper: Paper) -> PaperRankingResponse:
         abstract = paper.abstract.lower()
         finance_terms = ["forecast", "return", "asset", "financial", "price", "market", "trading"]
@@ -121,6 +133,14 @@ class MockLLMClient(LLMClient):
         if prediction_target is None:
             missing_information.append("Prediction target is not clearly specified in the abstract.")
         constraints = ["Needs real dataset mapping", "Needs realistic transaction cost assumptions"]
+        if "return" in abstract and any(term in abstract for term in {"trade", "trading", "alpha", "long-short", "portfolio"}):
+            implementable_alpha_label = "yes"
+        elif any(term in abstract for term in {"return", "price", "forecast", "prediction", "predict"}):
+            implementable_alpha_label = "likely"
+        elif any(term in abstract for term in {"volatility", "risk", "liquidity", "hedging"}):
+            implementable_alpha_label = "unlikely"
+        else:
+            implementable_alpha_label = "no"
         return PaperSummaryResponse(
             summary=(
                 f"{paper.title} describes a {model_family} approach"
@@ -128,6 +148,7 @@ class MockLLMClient(LLMClient):
                 f"{horizon} horizon, using financial data assumptions that appear simple enough for an initial prototype."
             ),
             relevance_label=relevance_label,
+            implementable_alpha_label=implementable_alpha_label,
             why_relevant=why_relevant,
             model_family=model_family,
             prediction_target=prediction_target,
@@ -138,6 +159,50 @@ class MockLLMClient(LLMClient):
             missing_information=missing_information,
             caveats=["Abstract-only summary; important implementation details may be omitted."],
             implementation_constraints=constraints,
+        )
+
+    def summarize_full_paper(self, paper: Paper, full_text: str) -> FullPaperSummaryResponse:
+        abstract_summary = self.summarize_paper(paper)
+        text = full_text.lower()
+        if any(term in text for term in {"long-short", "trading strategy", "portfolio", "signal construction"}):
+            implementable_alpha_label = "yes"
+        else:
+            implementable_alpha_label = abstract_summary.implementable_alpha_label
+        if any(term in text for term in {"simple", "linear", "regression", "xgboost"}):
+            implementation_complexity = "medium"
+        elif any(term in text for term in {"transformer", "multi-agent", "reinforcement learning", "cross-attention"}):
+            implementation_complexity = "high"
+        else:
+            implementation_complexity = "medium"
+        if "sharpe ratio" in text:
+            strategy_quality = "promising"
+            sharpe_ratio_context = "Paper reports a Sharpe ratio, but exact parsing is not implemented in the mock client."
+        elif any(term in text for term in {"out-of-sample", "alpha", "return"}):
+            strategy_quality = "mixed"
+            sharpe_ratio_context = None
+        else:
+            strategy_quality = "unclear"
+            sharpe_ratio_context = None
+        return FullPaperSummaryResponse(
+            summary=f"Full-paper review of {paper.title}: {abstract_summary.summary}",
+            implementable_alpha_label=implementable_alpha_label,
+            alpha_thesis="Paper appears to describe a predictive signal that may be tradable after implementation details are clarified.",
+            implementation_complexity=implementation_complexity,
+            strategy_quality=strategy_quality,
+            sharpe_ratio=None,
+            sharpe_ratio_context=sharpe_ratio_context,
+            evidence=[
+                "Uses the full paper text rather than the abstract only.",
+                "Assesses whether the signal definition and evaluation protocol are concrete enough to implement.",
+            ],
+            implementation_requirements=[
+                "Map the stated inputs to a production dataset.",
+                "Rebuild the paper's signal construction and evaluation logic.",
+            ],
+            key_risks=[
+                "Paper details may still be underspecified for direct replication.",
+                "Reported performance may depend on data choices and frictions omitted from the paper.",
+            ],
         )
 
     def assess_prior_art(self, paper: RankedPaper) -> PriorArtAssessmentResponse:
@@ -237,6 +302,18 @@ class OpenAILLMClient(LLMClient):
             schema=PaperSummaryResponse,
             input_messages=self._prompts.summary_messages(paper),
             cache_identity={"paper_id": paper.paper_id, "updated": paper.updated.isoformat() if paper.updated else None},
+        )
+
+    def summarize_full_paper(self, paper: Paper, full_text: str) -> FullPaperSummaryResponse:
+        return self._parse_cached(
+            operation="summarize_full_paper",
+            schema=FullPaperSummaryResponse,
+            input_messages=self._prompts.full_paper_summary_messages(paper, full_text),
+            cache_identity={
+                "paper_id": paper.paper_id,
+                "updated": paper.updated.isoformat() if paper.updated else None,
+                "full_text_digest": hashlib.sha256(full_text.encode("utf-8")).hexdigest()[:20],
+            },
         )
 
     def assess_prior_art(self, paper: RankedPaper) -> PriorArtAssessmentResponse:

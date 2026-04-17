@@ -5,8 +5,17 @@ rank_paper_relevance: |
 summarize_paper: |
   Produce a structured research summary for this paper using only evidence that is reasonably supported by the provided text.
   Classify the paper as one of: directly_relevant, adjacent, or out_of_scope.
+  Assess whether it contains an implementable alpha as one of: yes, likely, unlikely, or no.
   Focus on whether it is useful for ML/deep learning forecasting of financial products or relative value research.
   If the abstract does not justify a field, use null or describe the uncertainty in missing_information instead of guessing.
+
+summarize_full_paper: |
+  Read the full paper text and produce a structured summary focused on tradable alpha quality and implementability.
+  Assess whether the paper contains an implementable alpha as one of: yes, likely, unlikely, or no.
+  Explain the alpha thesis concretely: what is predicted, what is traded, how positions are formed, and what evidence supports the claim.
+  Assess implementation complexity, strategy quality, and the practical requirements to reproduce the method.
+  If the paper reports a Sharpe ratio or other economically meaningful performance metric, include it; otherwise return null and explain the limitation in sharpe_ratio_context.
+  Use only information supported by the provided text. Do not infer missing numerical results.
 
 assess_prior_art: |
   Compare the paper against adjacent prior work and identify overlaps, differentiation, and replication risk.

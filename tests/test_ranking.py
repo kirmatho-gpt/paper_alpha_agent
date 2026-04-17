@@ -27,7 +27,7 @@ def test_rank_papers_orders_by_composite_score():
         ),
     ]
 
-    ranked = rank_papers(papers, llm_client=MockLLMClient(), relevance_threshold=0.0)
+    ranked = rank_papers(papers, llm_client=MockLLMClient(allow_mock=True), relevance_threshold=0.0)
 
     assert ranked[0].paper_id == "a"
     assert ranked[0].composite_score >= ranked[1].composite_score

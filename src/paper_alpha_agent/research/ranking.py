@@ -61,6 +61,7 @@ FINANCE_TERMS = {
     "bond": 1.5,
     "bonds": 1.5,
     "treasury": 1.5,
+    "banks": 1.5,
     "credit": 1.5,
     "option": 1.5,
     "options": 1.5,
@@ -106,7 +107,6 @@ FINANCE_TERMS = {
 }
 
 NEGATIVE_TERMS = {
-    "risk": -2.0,
     "asset management": -2.0,
     "portfolio optimization": -2.0,
     "allocation": -1.0,
@@ -142,39 +142,43 @@ def prefilter_papers(
     papers: list[Paper],
     min_score: float = 2.0,
     keep_at_least: int = 10,
+    log_decisions: bool = False,
 ) -> list[Paper]:
     scored = sorted(
         ((paper, heuristic_relevance_score(paper)) for paper in papers),
         key=lambda item: item[1],
         reverse=True,
     )
-    for paper, score in scored:
-        decision = "keep" if score >= min_score else "drop"
-        LOGGER.info(
-            "Prefilter score=%s decision=%s paper_id=%s title=%s",
-            score,
-            decision,
-            paper.paper_id,
-            paper.title,
-        )
+    if log_decisions:
+        for paper, score in scored:
+            decision = "keep" if score >= min_score else "drop"
+            LOGGER.info(
+                "Prefilter score=%s decision=%s paper_id=%s title=%s",
+                score,
+                decision,
+                paper.paper_id,
+                paper.title,
+            )
 
     kept = [paper for paper, score in scored if score >= min_score]
     if len(kept) < min(keep_at_least, len(scored)):
-        LOGGER.info(
-            "Prefilter fallback engaged: only %s papers met min_score=%s, keeping top %s by heuristic score",
-            len(kept),
-            min_score,
-            min(keep_at_least, len(scored)),
-        )
+        if log_decisions:
+            LOGGER.info(
+                "Prefilter fallback engaged: only %s papers met min_score=%s, keeping top %s by heuristic score",
+                len(kept),
+                min_score,
+                min(keep_at_least, len(scored)),
+            )
         kept = [paper for paper, _ in scored[: min(keep_at_least, len(scored))]]
 
-    LOGGER.info(
-        "Prefilter completed: input=%s kept=%s min_score=%s keep_at_least=%s",
-        len(papers),
-        len(kept),
-        min_score,
-        keep_at_least,
-    )
+    if log_decisions:
+        LOGGER.info(
+            "Prefilter completed: input=%s kept=%s min_score=%s keep_at_least=%s",
+            len(papers),
+            len(kept),
+            min_score,
+            keep_at_least,
+        )
     return kept
 
 
@@ -182,17 +186,24 @@ def shortlist_papers_for_ranking(
     papers: list[Paper],
     shortlist_size: int,
     min_score: float = 5.0,
+    log_decisions: bool = False,
 ) -> list[Paper]:
-    prefiltered = prefilter_papers(papers, min_score=min_score, keep_at_least=shortlist_size)
+    prefiltered = prefilter_papers(
+        papers,
+        min_score=min_score,
+        keep_at_least=shortlist_size,
+        log_decisions=log_decisions,
+    )
     shortlisted = sorted(prefiltered, key=heuristic_relevance_score, reverse=True)[:shortlist_size]
-    for rank, paper in enumerate(shortlisted, start=1):
-        LOGGER.info(
-            "Shortlist rank=%s score=%s paper_id=%s title=%s",
-            rank,
-            heuristic_relevance_score(paper),
-            paper.paper_id,
-            paper.title,
-        )
+    if log_decisions:
+        for rank, paper in enumerate(shortlisted, start=1):
+            LOGGER.info(
+                "Shortlist rank=%s score=%s paper_id=%s title=%s",
+                rank,
+                heuristic_relevance_score(paper),
+                paper.paper_id,
+                paper.title,
+            )
     return shortlisted
 
 

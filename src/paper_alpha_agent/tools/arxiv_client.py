@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import logging
 import time
 import xml.etree.ElementTree as ET
@@ -18,6 +19,8 @@ LOGGER = logging.getLogger(__name__)
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
 ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
 DEFAULT_CACHE_DIR = Path(__file__).resolve().parents[3] / "data" / "cache" / "arxiv"
+DEFAULT_PDF_CACHE_DIR = Path(__file__).resolve().parents[3] / "data" / "cache" / "arxiv_pdf"
+DEFAULT_FULL_TEXT_CACHE_DIR = Path(__file__).resolve().parents[3] / "data" / "cache" / "arxiv_full_text"
 
 
 class ArxivClient:
@@ -27,6 +30,8 @@ class ArxivClient:
         base_url: str = ARXIV_API_URL,
         request_pause_seconds: float = 4.0,
         cache_dir: Path = DEFAULT_CACHE_DIR,
+        pdf_cache_dir: Path = DEFAULT_PDF_CACHE_DIR,
+        full_text_cache_dir: Path = DEFAULT_FULL_TEXT_CACHE_DIR,
     ) -> None:
         """Create a minimal arXiv export API client.
 
@@ -65,6 +70,10 @@ class ArxivClient:
         self.request_pause_seconds = request_pause_seconds
         self.cache_dir = cache_dir
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.pdf_cache_dir = pdf_cache_dir
+        self.pdf_cache_dir.mkdir(parents=True, exist_ok=True)
+        self.full_text_cache_dir = full_text_cache_dir
+        self.full_text_cache_dir.mkdir(parents=True, exist_ok=True)
 
     def search(
         self,
@@ -164,6 +173,50 @@ class ArxivClient:
         )
         LOGGER.info("Fetched %s papers from arXiv for query '%s'", len(papers), query)
         return papers
+
+    def fetch_full_text(self, paper: Paper, max_chars: int = 120_000) -> str:
+        if not paper.pdf_url:
+            raise ValueError(f"Paper {paper.paper_id} does not have a PDF URL.")
+
+        full_text_cache_path = self._full_text_cache_path(paper)
+        if full_text_cache_path.exists():
+            LOGGER.info("Using cached full text for paper '%s' from %s", paper.paper_id, full_text_cache_path)
+            return full_text_cache_path.read_text(encoding="utf-8")[:max_chars]
+
+        pdf_cache_path = self._pdf_cache_path(paper)
+        if pdf_cache_path.exists():
+            pdf_bytes = pdf_cache_path.read_bytes()
+        else:
+            if self.request_pause_seconds > 0:
+                time.sleep(self.request_pause_seconds)
+            response = self.http_client.get(str(paper.pdf_url))
+            response.raise_for_status()
+            pdf_bytes = response.content
+            pdf_cache_path.write_bytes(pdf_bytes)
+
+        full_text = self._extract_pdf_text(pdf_bytes)
+        normalized = full_text if full_text.strip() else paper.abstract
+        full_text_cache_path.write_text(normalized, encoding="utf-8")
+        return normalized[:max_chars]
+
+    def _pdf_cache_path(self, paper: Paper) -> Path:
+        digest = hashlib.sha256(f"{paper.paper_id}:{paper.pdf_url}".encode("utf-8")).hexdigest()[:16]
+        return self.pdf_cache_dir / f"{_slugify(paper.paper_id)}_{digest}.pdf"
+
+    def _full_text_cache_path(self, paper: Paper) -> Path:
+        digest = hashlib.sha256(f"{paper.paper_id}:{paper.updated}".encode("utf-8")).hexdigest()[:16]
+        return self.full_text_cache_dir / f"{_slugify(paper.paper_id)}_{digest}.txt"
+
+    @staticmethod
+    def _extract_pdf_text(pdf_bytes: bytes) -> str:
+        try:
+            from pypdf import PdfReader
+        except ImportError as exc:
+            raise RuntimeError("The `pypdf` package is required for full paper text extraction.") from exc
+
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        pages = [page.extract_text() or "" for page in reader.pages]
+        return "\n\n".join(pages)
 
     @staticmethod
     def parse_feed(feed_xml: str, query_topic: str | None = None) -> list[Paper]:

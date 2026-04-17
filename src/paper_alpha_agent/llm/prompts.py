@@ -35,6 +35,23 @@ class PromptLibrary:
             {"role": "user", "content": f"Title: {paper.title}\n\nAbstract:\n{paper.abstract}"},
         ]
 
+    def full_paper_summary_messages(self, paper: Paper, full_text: str) -> list[dict[str, str]]:
+        return [
+            {"role": "system", "content": self.get("summarize_full_paper")},
+            {
+                "role": "user",
+                "content": (
+                    f"Title: {paper.title}\n"
+                    f"Authors: {', '.join(paper.authors)}\n"
+                    f"Published: {paper.published.isoformat()}\n"
+                    f"Categories: {', '.join(paper.categories)}\n"
+                    f"Topic: {paper.query_topic}\n\n"
+                    f"Abstract:\n{paper.abstract}\n\n"
+                    f"Full paper text:\n{full_text}"
+                ),
+            },
+        ]
+
     def prior_art_messages(self, paper: RankedPaper) -> list[dict[str, str]]:
         return [
             {"role": "system", "content": self.get("assess_prior_art")},

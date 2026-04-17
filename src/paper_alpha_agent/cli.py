@@ -7,6 +7,10 @@ import typer
 from paper_alpha_agent.config import get_settings
 from paper_alpha_agent.logging_config import configure_logging
 from paper_alpha_agent.orchestration.pipeline import (
+    DEFAULT_TOPIC_FETCH_LIMIT,
+    DEFAULT_TOPIC_FULL_PAPER_LIMIT,
+    DEFAULT_TOPIC_SUMMARY_LIMIT,
+    DEFAULT_TOPIC_SUMMARIZATION_TOPICS,
     ResearchPipeline,
     build_default_dependencies,
     run_research_pipeline,
@@ -96,6 +100,11 @@ def summarize(
     start_date: str | None = typer.Option(None, help="Inclusive ISO start date."),
     end_date: str | None = typer.Option(None, help="Inclusive ISO end date."),
     json_output: bool = typer.Option(False, "--json", help="Print structured summary JSON."),
+    show_heuristic_logs: bool = typer.Option(
+        False,
+        "--show-heuristic-logs",
+        help="Suppress prefilter and shortlist heuristic logs. Logging is suppressed by default.",
+    ),
 ) -> None:
     settings = get_settings()
     dependencies = build_default_dependencies(settings)
@@ -115,6 +124,7 @@ def summarize(
     shortlisted_papers = shortlist_papers_for_ranking(
         fetched_papers,
         shortlist_size=min(resolved_shortlist_limit, len(fetched_papers)),
+        log_decisions=show_heuristic_logs,
     )
     selected_papers = shortlisted_papers[:limit]
 
@@ -141,6 +151,7 @@ def summarize(
         else:
             typer.echo(f"summary: {summary.summary}")
             typer.echo(f"relevance_label: {summary.relevance_label}")
+            typer.echo(f"implementable_alpha_label: {summary.implementable_alpha_label}")
             typer.echo(f"why_relevant: {', '.join(summary.why_relevant)}")
             typer.echo(f"model_family: {summary.model_family}")
             typer.echo(f"prediction_target: {summary.prediction_target}")
@@ -150,6 +161,88 @@ def summarize(
             typer.echo(f"implementation_takeaways: {', '.join(summary.implementation_takeaways)}")
             typer.echo(f"missing_information: {', '.join(summary.missing_information)}")
             typer.echo(f"caveats: {', '.join(summary.caveats)}")
+
+
+@app.command()
+def summarize_topics(
+    json_output: bool = typer.Option(False, "--json", help="Print structured stage JSON."),
+    full_paper_limit: int = typer.Option(
+        DEFAULT_TOPIC_FULL_PAPER_LIMIT,
+        "--full-paper-limit",
+        min=1,
+        help="Number of filtered papers to download and summarize from full text.",
+    ),
+    show_heuristic_logs: bool = typer.Option(
+        False,
+        "--show-heuristic-logs",
+        help="Enable prefilter and shortlist heuristic logs during topic summarization.",
+    ),
+    start_date: str | None = typer.Option(None, help="Inclusive ISO start date."),
+    end_date: str | None = typer.Option(None, help="Inclusive ISO end date."),
+) -> None:
+    settings = get_settings()
+    dependencies = build_default_dependencies(settings)
+    result = ResearchPipeline(dependencies).summarize_topics(
+        topics=DEFAULT_TOPIC_SUMMARIZATION_TOPICS,
+        fetch_limit=DEFAULT_TOPIC_FETCH_LIMIT,
+        summary_limit=DEFAULT_TOPIC_SUMMARY_LIMIT,
+        full_paper_limit=full_paper_limit,
+        log_heuristic_decisions=show_heuristic_logs,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    if json_output:
+        typer.echo(result.model_dump_json(indent=2))
+        return
+
+    typer.echo(f"topics={result.topics}")
+    typer.echo(f"fetch_limit={result.fetch_limit}")
+    typer.echo(f"summary_limit={result.summary_limit}")
+    typer.echo(f"full_paper_limit={result.full_paper_limit}")
+    typer.echo(f"merged_directly_relevant={len(result.directly_relevant_papers)}")
+    typer.echo(f"filtered_candidates={len(result.filtered_papers)}")
+    typer.echo(f"full_paper_summaries={len(result.full_paper_summaries)}")
+
+    for batch in result.batches:
+        typer.echo(
+            f"\n[{batch.topic}] fetched={batch.fetched_count} "
+            f"summarized={len(batch.summarized_papers)} "
+            f"directly_relevant={len(batch.directly_relevant_papers)}"
+        )
+
+    if not result.filtered_papers:
+        typer.echo("\nNo directly relevant papers with implementable alpha in {yes, likely}.", err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo("\nFinal filtered candidates before full-paper truncation:")
+    typer.echo("selected_for_full_text | alpha | global_rank | topic_rank | topic | title | link")
+    selected_paper_ids = {paper.paper_id for paper in result.full_paper_summaries}
+    for index, paper in enumerate(result.filtered_papers, start=1):
+        link = str(paper.entry_url or paper.pdf_url or "")
+        selected_for_full_text = "yes" if paper.paper_id in selected_paper_ids else "no"
+        typer.echo(
+            f"{selected_for_full_text} | "
+            f"{paper.implementable_alpha_label} | "
+            f"{paper.global_rank} | "
+            f"{paper.summary_rank} | "
+            f"{paper.query_topic} | "
+            f"{paper.title} | "
+            f"{link}"
+        )
+
+    for index, paper in enumerate(result.full_paper_summaries, start=1):
+        typer.echo(f"\n--- Full Paper Summary {index} ---")
+        typer.echo(f"global_rank: {paper.global_rank}")
+        typer.echo(f"topic_rank: {paper.summary_rank}")
+        typer.echo(f"topic: {paper.query_topic}")
+        typer.echo(f"title: {paper.title}")
+        typer.echo(f"implementable_alpha_label: {paper.implementable_alpha_label}")
+        typer.echo(f"implementation_complexity: {paper.implementation_complexity}")
+        typer.echo(f"strategy_quality: {paper.strategy_quality}")
+        typer.echo(f"sharpe_ratio: {paper.sharpe_ratio}")
+        typer.echo(f"sharpe_ratio_context: {paper.sharpe_ratio_context}")
+        typer.echo(f"full_text_summary: {paper.full_text_summary}")
 
 
 @app.command()

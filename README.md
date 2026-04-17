@@ -10,7 +10,7 @@ The current backbone can:
 
 - query the arXiv export API for finance/ML-related topics
 - parse and deduplicate papers into typed domain models
-- score papers for relevance, implementability, and novelty using a mock LLM interface
+- score papers for relevance, implementability, and novelty using an OpenAI-backed LLM interface
 - enrich top papers with stubbed prior-art analysis
 - extract research ideas and prototype specifications
 - fetch sample market data through an abstract market data interface
@@ -19,7 +19,7 @@ The current backbone can:
 
 ## Current limitations
 
-- LLM calls are mocked and return structured placeholder outputs
+- The runtime pipeline requires a real OpenAI client; the mock LLM is test-only
 - Semantic Scholar integration is stubbed
 - Market data uses a dummy local generator rather than a production data vendor
 - Backtesting is deliberately simple and meant only to validate wiring
@@ -77,7 +77,7 @@ PAPER_ALPHA_AGENT__API_KEYS__OPENAI=...
 PAPER_ALPHA_AGENT__API_KEYS__SEMANTIC_SCHOLAR=...
 ```
 
-## Replacing the mock LLM layer later
+## LLM integration
 
 The LLM boundary is concentrated in:
 
@@ -85,13 +85,13 @@ The LLM boundary is concentrated in:
 - `src/paper_alpha_agent/llm/schemas.py`
 - `src/paper_alpha_agent/llm/prompts.py`
 
-To switch to real ChatGPT-based calls later:
+The runtime pipeline uses the OpenAI-backed client in:
 
-1. implement a real `LLMClient` subclass in `llm/client.py`
-2. load prompt templates from `config/prompts.yaml`
-3. call the model with `response_format` or schema-constrained outputs
-4. validate model responses through the existing Pydantic schema layer
-5. keep orchestration unchanged so stages remain deterministic and testable
+1. `src/paper_alpha_agent/llm/client.py`
+2. `src/paper_alpha_agent/llm/schemas.py`
+3. `src/paper_alpha_agent/llm/prompts.py`
+
+`MockLLMClient` remains in the codebase for tests only and must be enabled explicitly with `allow_mock=True`.
 
 ## Git setup
 

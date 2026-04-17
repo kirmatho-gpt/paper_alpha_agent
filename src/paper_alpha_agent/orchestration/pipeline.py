@@ -5,15 +5,23 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from paper_alpha_agent.config import AppSettings, get_settings
-from paper_alpha_agent.llm.client import LLMClient, MockLLMClient, OpenAILLMClient
-from paper_alpha_agent.models.paper import Paper, RankedPaper
+from paper_alpha_agent.llm.client import LLMClient, OpenAILLMClient
+from paper_alpha_agent.models.paper import (
+    ALPHA_PRIORITY,
+    FullPaperSummary,
+    Paper,
+    RankedPaper,
+    SummarizedPaper,
+    TopicSummaryBatch,
+    TopicSummaryStageResult,
+)
 from paper_alpha_agent.models.report import ResearchReport
 from paper_alpha_agent.research.discovery import default_date_window, discover_papers
 from paper_alpha_agent.research.evaluation import evaluate_prototypes
 from paper_alpha_agent.research.idea_extraction import extract_ideas
 from paper_alpha_agent.research.prior_art import enrich_with_prior_art
 from paper_alpha_agent.research.prototype_builder import build_prototypes
-from paper_alpha_agent.research.ranking import rank_papers
+from paper_alpha_agent.research.ranking import heuristic_relevance_score, rank_papers, shortlist_papers_for_ranking
 from paper_alpha_agent.tools.arxiv_client import ArxivClient
 from paper_alpha_agent.tools.backtest_runner import BacktestRunner, SimpleBacktestRunner
 from paper_alpha_agent.tools.market_data_client import DummyMarketDataClient, MarketDataClient
@@ -22,6 +30,11 @@ from paper_alpha_agent.tools.semantic_scholar_client import SemanticScholarClien
 
 
 LOGGER = logging.getLogger(__name__)
+
+DEFAULT_TOPIC_SUMMARIZATION_TOPICS = ["markets", "bonds", "forecasting", "commodities", "stocks"]
+DEFAULT_TOPIC_FETCH_LIMIT = 30
+DEFAULT_TOPIC_SUMMARY_LIMIT = 7
+DEFAULT_TOPIC_FULL_PAPER_LIMIT = 10
 
 
 @dataclass
@@ -37,11 +50,13 @@ class PipelineDependencies:
 
 def build_default_dependencies(settings: AppSettings | None = None) -> PipelineDependencies:
     resolved = settings or get_settings()
-    llm_client: LLMClient
-    if resolved.api_keys.openai:
-        llm_client = OpenAILLMClient(resolved)
-    else:
-        llm_client = MockLLMClient()
+    if not resolved.api_keys.openai:
+        raise RuntimeError(
+            "OpenAI API key is required to build default pipeline dependencies. "
+            "Set PAPER_ALPHA_AGENT__API_KEYS__OPENAI or inject an explicit llm_client."
+        )
+
+    llm_client: LLMClient = OpenAILLMClient(resolved)
     return PipelineDependencies(
         settings=resolved,
         arxiv_client=ArxivClient(),
@@ -72,11 +87,146 @@ class ResearchPipeline:
             default_window_days=settings.pipeline.date_window_days,
         )
 
+    def summarize_topics(
+        self,
+        topics: list[str] | None = None,
+        fetch_limit: int = DEFAULT_TOPIC_FETCH_LIMIT,
+        summary_limit: int = DEFAULT_TOPIC_SUMMARY_LIMIT,
+        full_paper_limit: int = DEFAULT_TOPIC_FULL_PAPER_LIMIT,
+        log_heuristic_decisions: bool = False,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> TopicSummaryStageResult:
+        settings = self.dependencies.settings
+        if not start_date or not end_date:
+            default_start, default_end = default_date_window(settings.pipeline.date_window_days)
+            start_date = start_date or default_start
+            end_date = end_date or default_end
+
+        resolved_topics = topics or DEFAULT_TOPIC_SUMMARIZATION_TOPICS
+        batches: list[TopicSummaryBatch] = []
+        directly_relevant_papers: list[SummarizedPaper] = []
+
+        for topic in resolved_topics:
+            fetched_papers = self.dependencies.arxiv_client.search(
+                query=topic,
+                max_results=fetch_limit,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            shortlisted_papers = shortlist_papers_for_ranking(
+                fetched_papers,
+                shortlist_size=min(summary_limit, len(fetched_papers)),
+                log_decisions=log_heuristic_decisions,
+            )
+            summarized_papers = [
+                self._summarize_paper(paper, summary_rank=index)
+                for index, paper in enumerate(shortlisted_papers, start=1)
+            ]
+            directly_relevant_for_topic = [
+                paper for paper in summarized_papers if paper.relevance_label == "directly_relevant"
+            ]
+            directly_relevant_papers.extend(directly_relevant_for_topic)
+            batches.append(
+                TopicSummaryBatch(
+                    topic=topic,
+                    fetched_count=len(fetched_papers),
+                    summarized_papers=summarized_papers,
+                    directly_relevant_papers=directly_relevant_for_topic,
+                )
+            )
+
+        filtered_papers = self._filter_topic_summary_candidates(directly_relevant_papers)
+        full_paper_summaries = [self._summarize_full_paper(paper) for paper in filtered_papers[:full_paper_limit]]
+
+        return TopicSummaryStageResult(
+            topics=resolved_topics,
+            fetch_limit=fetch_limit,
+            summary_limit=summary_limit,
+            full_paper_limit=full_paper_limit,
+            batches=batches,
+            directly_relevant_papers=directly_relevant_papers,
+            filtered_papers=filtered_papers,
+            full_paper_summaries=full_paper_summaries,
+        )
+
     def rank(self, papers: list[Paper]) -> list[RankedPaper]:
         return rank_papers(
             papers,
             llm_client=self.dependencies.llm_client,
             relevance_threshold=self.dependencies.settings.pipeline.relevance_threshold,
+        )
+
+    def _summarize_paper(self, paper: Paper, summary_rank: int | None = None) -> SummarizedPaper:
+        summary = self.dependencies.llm_client.summarize_paper(paper)
+        return SummarizedPaper.model_validate(
+            {
+                **paper.model_dump(mode="json"),
+                "summary_rank": summary_rank,
+                **summary.model_dump(mode="json"),
+            }
+        )
+
+    def _summarize_full_paper(self, paper: SummarizedPaper) -> FullPaperSummary:
+        full_text = self.dependencies.arxiv_client.fetch_full_text(paper)
+        response = self.dependencies.llm_client.summarize_full_paper(paper, full_text)
+        return FullPaperSummary.model_validate(
+            {
+                **paper.model_dump(mode="json"),
+                "full_text_summary": response.summary,
+                "alpha_thesis": response.alpha_thesis,
+                "implementation_complexity": response.implementation_complexity,
+                "strategy_quality": response.strategy_quality,
+                "sharpe_ratio": response.sharpe_ratio,
+                "sharpe_ratio_context": response.sharpe_ratio_context,
+                "evidence": response.evidence,
+                "implementation_requirements": response.implementation_requirements,
+                "key_risks": response.key_risks,
+                "full_text_char_count": len(full_text),
+            }
+        )
+
+    @staticmethod
+    def _filter_topic_summary_candidates(papers: list[SummarizedPaper]) -> list[SummarizedPaper]:
+        filtered = [
+            paper
+            for paper in papers
+            if paper.relevance_label == "directly_relevant"
+            and paper.implementable_alpha_label in {"yes", "likely"}
+        ]
+        deduped: dict[str, SummarizedPaper] = {}
+        for paper in filtered:
+            incumbent = deduped.get(paper.paper_id)
+            if incumbent is None:
+                deduped[paper.paper_id] = paper
+                continue
+            if ResearchPipeline._topic_summary_sort_key(paper) < ResearchPipeline._topic_summary_sort_key(incumbent):
+                deduped[paper.paper_id] = paper
+
+        reranked = sorted(
+            deduped.values(),
+            key=lambda paper: (
+                ALPHA_PRIORITY.get(paper.implementable_alpha_label, 99),
+                -heuristic_relevance_score(paper),
+                paper.summary_rank if paper.summary_rank is not None else 999,
+            ),
+        )
+        return [
+            paper.model_copy(
+                update={
+                    "global_rank": index,
+                    "global_relevance_score": heuristic_relevance_score(paper),
+                }
+            )
+            for index, paper in enumerate(reranked, start=1)
+        ]
+
+    @staticmethod
+    def _topic_summary_sort_key(paper: SummarizedPaper) -> tuple[int, float, int]:
+        return (
+            ALPHA_PRIORITY.get(paper.implementable_alpha_label, 99),
+            -heuristic_relevance_score(paper),
+            paper.summary_rank if paper.summary_rank is not None else 999,
         )
 
     def prior_art(self, papers: list[RankedPaper]) -> dict[str, list]:

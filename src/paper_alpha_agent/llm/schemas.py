@@ -9,6 +9,7 @@ from paper_alpha_agent.models.paper import RelatedWorkItem
 class PaperSummaryResponse(BaseModel):
     summary: str
     relevance_label: str
+    implementable_alpha_label: str
     why_relevant: list[str] = Field(default_factory=list)
     model_family: str | None = None
     prediction_target: str | None = None
@@ -19,6 +20,19 @@ class PaperSummaryResponse(BaseModel):
     missing_information: list[str] = Field(default_factory=list)
     caveats: list[str] = Field(default_factory=list)
     implementation_constraints: list[str] = Field(default_factory=list)
+
+
+class FullPaperSummaryResponse(BaseModel):
+    summary: str
+    implementable_alpha_label: str
+    alpha_thesis: str | None = None
+    implementation_complexity: str | None = None
+    strategy_quality: str | None = None
+    sharpe_ratio: float | None = None
+    sharpe_ratio_context: str | None = None
+    evidence: list[str] = Field(default_factory=list)
+    implementation_requirements: list[str] = Field(default_factory=list)
+    key_risks: list[str] = Field(default_factory=list)
 
 
 class PaperRankingResponse(BaseModel):

@@ -5,6 +5,7 @@ from enum import StrEnum
 
 class PipelineStage(StrEnum):
     DISCOVER = "discover"
+    SUMMARIZE_TOPICS = "summarize_topics"
     RANK = "rank"
     PRIOR_ART = "prior_art"
     SELECT = "select"

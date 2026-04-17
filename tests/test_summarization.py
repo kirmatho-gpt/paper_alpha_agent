@@ -9,7 +9,7 @@ import pytest
 from paper_alpha_agent.config import AppSettings
 from paper_alpha_agent.llm.client import MockLLMClient, OpenAILLMClient
 from paper_alpha_agent.llm.prompts import PromptLibrary
-from paper_alpha_agent.llm.schemas import PaperSummaryResponse
+from paper_alpha_agent.llm.schemas import FullPaperSummaryResponse, PaperSummaryResponse
 from paper_alpha_agent.models.paper import Paper
 
 
@@ -29,11 +29,12 @@ def _sample_paper() -> Paper:
 
 
 def test_mock_summarize_paper_returns_deterministic_summary():
-    summary = MockLLMClient().summarize_paper(_sample_paper())
+    summary = MockLLMClient(allow_mock=True).summarize_paper(_sample_paper())
 
     assert "transformer" in summary.summary.lower()
     assert "future returns" in summary.summary.lower()
     assert summary.relevance_label == "directly_relevant"
+    assert summary.implementable_alpha_label == "likely"
     assert len(summary.why_relevant) > 0
     assert summary.model_family == "transformer"
     assert summary.prediction_target == "future returns"
@@ -54,6 +55,7 @@ def test_openai_summarize_paper_uses_summary_prompt(monkeypatch):
         return PaperSummaryResponse(
             summary="Structured summary from OpenAI",
             relevance_label="directly_relevant",
+            implementable_alpha_label="yes",
         )
 
     monkeypatch.setattr(OpenAILLMClient, "__init__", fake_init)
@@ -72,11 +74,26 @@ def test_openai_summarize_paper_uses_summary_prompt(monkeypatch):
 
     assert summary.summary == "Structured summary from OpenAI"
     assert summary.relevance_label == "directly_relevant"
+    assert summary.implementable_alpha_label == "yes"
     assert len(calls) == 1
     schema, messages = calls[0]
     assert schema is PaperSummaryResponse
     assert messages[0]["content"] == "Summarize this paper clearly."
     assert "Abstract:" in messages[1]["content"]
+
+
+def test_mock_summarize_full_paper_returns_structured_fields():
+    client = MockLLMClient(allow_mock=True)
+    summary = client.summarize_full_paper(
+        _sample_paper(),
+        "The paper defines a long-short trading strategy and reports a Sharpe ratio of 1.4 out of sample.",
+    )
+
+    assert isinstance(summary, FullPaperSummaryResponse)
+    assert summary.implementable_alpha_label == "yes"
+    assert summary.implementation_complexity is not None
+    assert summary.strategy_quality is not None
+    assert len(summary.evidence) > 0
 
 
 @pytest.mark.parametrize(
@@ -89,7 +106,7 @@ def test_openai_summarize_paper_uses_summary_prompt(monkeypatch):
 def test_mock_summarize_paper_uses_abstract_signals(abstract: str, expected_fragment: str):
     paper = _sample_paper().model_copy(update={"abstract": abstract})
 
-    summary = MockLLMClient().summarize_paper(paper)
+    summary = MockLLMClient(allow_mock=True).summarize_paper(paper)
 
     assert expected_fragment in summary.summary.lower() or expected_fragment == summary.prediction_target
 
@@ -121,5 +138,6 @@ def test_openai_live_summarize_paper():
 
     assert isinstance(summary, PaperSummaryResponse)
     assert len(summary.summary.strip()) > 20
+    assert summary.implementable_alpha_label in {"yes", "likely", "unlikely", "no"}
     print("\nLive OpenAI summary:\n")
     print(summary.model_dump_json(indent=2))
