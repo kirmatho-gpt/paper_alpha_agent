@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 
 import typer
 
@@ -19,9 +20,68 @@ from paper_alpha_agent.models.report import ResearchReport
 from paper_alpha_agent.research.discovery import default_date_window
 from paper_alpha_agent.research.ranking import shortlist_papers_for_ranking, rank_papers
 from paper_alpha_agent.tools.report_writer import MarkdownReportWriter
+from paper_alpha_agent.tools.topic_summary_email_writer import TopicSummaryEmailHtmlWriter
 
 
 app = typer.Typer(help="Bounded research pipeline for finance-focused paper discovery and prototyping.")
+
+
+def _stringify(value: object) -> str:
+    return "None" if value is None else str(value)
+
+
+def _truncate(value: str, width: int) -> str:
+    if len(value) <= width:
+        return value
+    if width <= 3:
+        return value[:width]
+    return f"{value[: width - 3]}..."
+
+
+def _format_table_row(cells: list[str], widths: list[int], right_aligned_indexes: set[int] | None = None) -> str:
+    right_aligned_indexes = right_aligned_indexes or set()
+    formatted_cells: list[str] = []
+    for index, (cell, width) in enumerate(zip(cells, widths, strict=True)):
+        clipped_cell = _truncate(cell, width)
+        if index in right_aligned_indexes:
+            formatted_cells.append(clipped_cell.rjust(width))
+        else:
+            formatted_cells.append(clipped_cell.ljust(width))
+    return " | ".join(formatted_cells)
+
+
+def _build_filtered_candidates_table_lines(filtered_papers: list, selected_paper_ids: set[str]) -> list[str]:
+    headers = ["selected", "alpha", "g_rank", "t_rank", "topic", "link", "title"]
+    link_values = [str(paper.entry_url or paper.pdf_url or "") for paper in filtered_papers]
+    link_width = max([len("link"), *(len(link) for link in link_values)])
+    widths = [8, 6, 6, 6, 12, link_width, 38]
+    right_aligned_indexes = {2, 3}
+
+    lines = [
+        _format_table_row(headers, widths, right_aligned_indexes=right_aligned_indexes),
+        "-+-".join("-" * width for width in widths),
+    ]
+
+    for paper in filtered_papers:
+        link = str(paper.entry_url or paper.pdf_url or "")
+        selected_for_full_text = "yes" if paper.paper_id in selected_paper_ids else "no"
+        lines.append(
+            _format_table_row(
+                [
+                    selected_for_full_text,
+                    _stringify(paper.implementable_alpha_label),
+                    _stringify(paper.global_rank),
+                    _stringify(paper.summary_rank),
+                    _stringify(paper.query_topic),
+                    link,
+                    _stringify(paper.title),
+                ],
+                widths,
+                right_aligned_indexes=right_aligned_indexes,
+            )
+        )
+
+    return lines
 
 
 @app.callback()
@@ -216,33 +276,25 @@ def summarize_topics(
         raise typer.Exit(code=1)
 
     typer.echo("\nFinal filtered candidates before full-paper truncation:")
-    typer.echo("selected_for_full_text | alpha | global_rank | topic_rank | topic | title | link")
     selected_paper_ids = {paper.paper_id for paper in result.full_paper_summaries}
-    for index, paper in enumerate(result.filtered_papers, start=1):
-        link = str(paper.entry_url or paper.pdf_url or "")
-        selected_for_full_text = "yes" if paper.paper_id in selected_paper_ids else "no"
-        typer.echo(
-            f"{selected_for_full_text} | "
-            f"{paper.implementable_alpha_label} | "
-            f"{paper.global_rank} | "
-            f"{paper.summary_rank} | "
-            f"{paper.query_topic} | "
-            f"{paper.title} | "
-            f"{link}"
-        )
+    for line in _build_filtered_candidates_table_lines(result.filtered_papers, selected_paper_ids):
+        typer.echo(line)
 
     for index, paper in enumerate(result.full_paper_summaries, start=1):
-        typer.echo(f"\n--- Full Paper Summary {index} ---")
-        typer.echo(f"global_rank: {paper.global_rank}")
-        typer.echo(f"topic_rank: {paper.summary_rank}")
-        typer.echo(f"topic: {paper.query_topic}")
-        typer.echo(f"title: {paper.title}")
-        typer.echo(f"implementable_alpha_label: {paper.implementable_alpha_label}")
-        typer.echo(f"implementation_complexity: {paper.implementation_complexity}")
-        typer.echo(f"strategy_quality: {paper.strategy_quality}")
-        typer.echo(f"sharpe_ratio: {paper.sharpe_ratio}")
-        typer.echo(f"sharpe_ratio_context: {paper.sharpe_ratio_context}")
-        typer.echo(f"full_text_summary: {paper.full_text_summary}")
+        typer.echo(
+            f"\n[PaperSummary #{index}] "
+            f"global_rank={_stringify(paper.global_rank)} "
+            f"topic_rank={_stringify(paper.summary_rank)} "
+            f"topic={_stringify(paper.query_topic)} "
+            f"alpha={_stringify(paper.implementable_alpha_label)}"
+        )
+        typer.echo(f"Title      : {_stringify(paper.title)}")
+        typer.echo(f"Complexity : {_stringify(paper.implementation_complexity)}")
+        typer.echo(f"Quality    : {_stringify(paper.strategy_quality)}")
+        typer.echo(f"Sharpe     : {_stringify(paper.sharpe_ratio)}")
+        typer.echo(f"SharpeNote : {_stringify(paper.sharpe_ratio_context)}")
+        typer.echo("Summary:")
+        typer.echo(_stringify(paper.full_text_summary))
 
 
 @app.command()
@@ -316,6 +368,56 @@ def rank(
             f"{paper.novelty_score:.2f} | "
             f"{paper.composite_score:.2f}"
         )
+
+
+@app.command()
+def summarize_topics_email(
+    full_paper_limit: int = typer.Option(
+        DEFAULT_TOPIC_FULL_PAPER_LIMIT,
+        "--full-paper-limit",
+        min=1,
+        help="Number of filtered papers to download and summarize from full text.",
+    ),
+    show_heuristic_logs: bool = typer.Option(
+        False,
+        "--show-heuristic-logs",
+        help="Enable prefilter and shortlist heuristic logs during topic summarization.",
+    ),
+    start_date: str | None = typer.Option(None, help="Inclusive ISO start date."),
+    end_date: str | None = typer.Option(None, help="Inclusive ISO end date."),
+    output_file: str | None = typer.Option(
+        None,
+        "--output-file",
+        help="Optional output path for the generated HTML file.",
+    ),
+) -> None:
+    settings = get_settings()
+    dependencies = build_default_dependencies(settings)
+
+    if not start_date or not end_date:
+        start_date, end_date = default_date_window(settings.pipeline.date_window_days)
+
+    result = ResearchPipeline(dependencies).summarize_topics(
+        topics=DEFAULT_TOPIC_SUMMARIZATION_TOPICS,
+        fetch_limit=DEFAULT_TOPIC_FETCH_LIMIT,
+        summary_limit=DEFAULT_TOPIC_SUMMARY_LIMIT,
+        full_paper_limit=full_paper_limit,
+        log_heuristic_decisions=show_heuristic_logs,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    writer = TopicSummaryEmailHtmlWriter(settings.report_output_path)
+    output_path = Path(output_file).expanduser() if output_file else None
+    path = writer.write(
+        result=result,
+        start_date=start_date,
+        end_date=end_date,
+        output_path=output_path,
+    )
+
+    typer.echo(f"HTML topic summary email written to {path}")
+    typer.echo(f"filtered_candidates={len(result.filtered_papers)}")
+    typer.echo(f"full_paper_summaries={len(result.full_paper_summaries)}")
 
 
 @app.command()
